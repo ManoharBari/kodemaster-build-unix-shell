@@ -3,80 +3,114 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
-#include <sys/types.h>
 
 #define BUFFER_SIZE 1024
 #define MAX_ARGS 64
 #define DELIMITERS " \t\r\n"
 
-char **parse_line(char *line) {
+char **parse_line(char *line)
+{
     static char *args[MAX_ARGS];
     int i = 0;
-    
+
     char *token = strtok(line, DELIMITERS);
-    while (token != NULL && i < MAX_ARGS - 1) {
+    while (token != NULL && i < MAX_ARGS - 1)
+    {
         args[i++] = token;
         token = strtok(NULL, DELIMITERS);
     }
     args[i] = NULL;
-    
+
     return args;
 }
 
-int execute(char **args) {
-    if (args[0] == NULL) {
-        return 1;  // Empty command
-    }
-    
+int execute_external(char **args)
+{
     pid_t pid = fork();
-    
-    if (pid == 0) {
-        // Child process
-        if (execvp(args[0], args) == -1) {
+
+    if (pid == 0)
+    {
+        if (execvp(args[0], args) == -1)
+        {
             fprintf(stderr, "%s: command not found\n", args[0]);
             exit(127);
         }
-    } else if (pid < 0) {
-        // Fork error
-        perror("fork");
-    } else {
-        // Parent process
+    }
+    else if (pid > 0)
+    {
         int status;
         waitpid(pid, &status, 0);
     }
-    
+    else
+    {
+        perror("fork");
+    }
+
     return 1;
 }
 
-int main(int argc, char *argv[]) {
+int handle_builtin(char **args)
+{
+    // exit [code]
+    if (strcmp(args[0], "exit") == 0)
+    {
+        int exit_code = 0;
+        if (args[1] != NULL)
+        {
+            exit_code = atoi(args[1]);
+        }
+        exit(exit_code);
+    }
+
+    // Not a builtin
+    return -1;
+}
+
+int execute(char **args)
+{
+    if (args[0] == NULL)
+    {
+        return 1;
+    }
+
+    // Try builtins first
+    int result = handle_builtin(args);
+    if (result != -1)
+    {
+        return result;
+    }
+
+    // Execute as external command
+    return execute_external(args);
+}
+
+int main(int argc, char *argv[])
+{
     char input[BUFFER_SIZE];
-    
-    while (1) {
-        // Print prompt
+    char **args;
+    int status = 1;
+
+    while (status)
+    {
         printf("$ ");
         fflush(stdout);
-        
-        // Read input
-        if (fgets(input, BUFFER_SIZE, stdin) == NULL) {
-            // EOF received (Ctrl+D)
+
+        if (fgets(input, BUFFER_SIZE, stdin) == NULL)
+        {
             printf("\n");
             break;
         }
-        
-        // Remove trailing newline
-        size_t len = strlen(input);
-        if (len > 0 && input[len - 1] == '\n') {
-            input[len - 1] = '\0';
-        }
-        
-        // Skip empty lines
-        if (strlen(input) == 0) {
+
+        input[strcspn(input, "\n")] = '\0';
+
+        if (strlen(input) == 0)
+        {
             continue;
         }
-        
-        // For now, just echo the input
-        printf("%s\n", input);
+
+        args = parse_line(input);
+        status = execute(args);
     }
-    
+
     return 0;
 }
