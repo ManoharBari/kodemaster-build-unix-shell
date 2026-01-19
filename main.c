@@ -1,28 +1,38 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
-// Buffer sizes
 #define BUFFER_SIZE 1024
-#define MAX_ARGS 64
 
 int main(int argc, char *argv[]) {
-    // Uncomment and implement the shell below!
+    char input[BUFFER_SIZE];
     
-    // char input[BUFFER_SIZE];
-    
-    // while (1) {
-    //     // TODO: Print the prompt "$ "
-    //     // Hint: Use printf("$ "); and fflush(stdout);
-    //     
-    //     // TODO: Read user input
-    //     // Hint: Use fgets(input, BUFFER_SIZE, stdin)
-    //     // Hint: Check for NULL (EOF) to exit cleanly
-    //     
-    //     // TODO: Parse and execute the command
-    //     // Hint: Start with the "exit" builtin
-    // }
+    while (1) {
+        // Print prompt
+        printf("$ ");
+        fflush(stdout);
+        
+        // Read input
+        if (fgets(input, BUFFER_SIZE, stdin) == NULL) {
+            // EOF received (Ctrl+D)
+            printf("\n");
+            break;
+        }
+        
+        // Remove trailing newline
+        size_t len = strlen(input);
+        if (len > 0 && input[len - 1] == '\n') {
+            input[len - 1] = '\0';
+        }
+        
+        // Skip empty lines
+        if (strlen(input) == 0) {
+            continue;
+        }
+        
+        // For now, just echo the input
+        printf("%s\n", input);
+    }
     
     return 0;
 }
