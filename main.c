@@ -26,82 +26,71 @@ int execute_external(char **args) {
     pid_t pid = fork();
     
     if (pid == 0) {
-        // Child process
         if (execvp(args[0], args) == -1) {
             fprintf(stderr, "%s: command not found\n", args[0]);
             exit(127);
         }
     } else if (pid > 0) {
-        // Parent process
         int status;
         waitpid(pid, &status, 0);
     } else {
-        // Fork failed
         perror("fork");
     }
     
-    return 1;  // Continue shell loop
+    return 1;
 }
 
-int handle_command(char **args) {
-    // Empty command
-    if (args[0] == NULL) {
-        return 1;  // Continue loop
-    }
-    
-    // ============================================
-    // BUILTIN: exit [code]
-    // ============================================
+int handle_builtin(char **args) {
+    // exit [code]
     if (strcmp(args[0], "exit") == 0) {
         int exit_code = 0;
-        
-        // If exit code provided, use it
         if (args[1] != NULL) {
             exit_code = atoi(args[1]);
         }
-        
-        // Flush all output before exiting
-        fflush(stdout);
-        fflush(stderr);
-        
-        // Exit the shell process with the specified code
         exit(exit_code);
     }
     
-    // ============================================
-    // Not a builtin - execute as external command
-    // ============================================
+    // Not a builtin
+    return -1;
+}
+
+int execute(char **args) {
+    if (args[0] == NULL) {
+        return 1;
+    }
+    
+    // Try builtins first
+    int result = handle_builtin(args);
+    if (result != -1) {
+        return result;
+    }
+    
+    // Execute as external command
     return execute_external(args);
 }
 
-int main(void) {
+int main(int argc, char *argv[]) {
     char input[BUFFER_SIZE];
     char **args;
     int status = 1;
     
-    // REPL: Read-Eval-Print Loop
     while (status) {
         printf("$ ");
         fflush(stdout);
         
-        // Read input
         if (fgets(input, BUFFER_SIZE, stdin) == NULL) {
-            // EOF (Ctrl+D)
             printf("\n");
             break;
         }
         
-        // Remove newline
         input[strcspn(input, "\n")] = '\0';
         
-        // Skip empty lines
         if (strlen(input) == 0) {
             continue;
         }
         
-        // Parse and execute
         args = parse_line(input);
-        status = handle_command(args);
+        status = execute(args);
     }
     
     return 0;
