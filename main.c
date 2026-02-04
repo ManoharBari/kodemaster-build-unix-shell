@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,6 +77,65 @@ int handle_builtin(char **args)
         }
         printf("\n"); // Newline at the end
         return 1;     // Continue shell loop
+    }
+
+    // type <command>
+    if (strcmp(args[0], "type") == 0)
+    {
+        if (args[1] == NULL)
+        {
+            fprintf(stderr, "type: missing argument\n");
+            return 1;
+        }
+
+        // Check if it's a builtin
+        if (strcmp(args[1], "exit") == 0 ||
+            strcmp(args[1], "echo") == 0 ||
+            strcmp(args[1], "type") == 0)
+        {
+            printf("%s is a shell builtin\n", args[1]);
+            return 1;
+        }
+
+        // Check if it's in PATH
+        char *path = getenv("PATH");
+        if (path == NULL)
+        {
+            printf("%s: not found\n", args[1]);
+            return 1;
+        }
+
+        char *path_copy = strdup(path);
+        if (path_copy == NULL)
+        {
+            perror("strdup");
+            return 1;
+        }
+
+        char *dir = strtok(path_copy, ":");
+        int found = 0;
+
+        while (dir != NULL)
+        {
+            char full_path[BUFFER_SIZE];
+            snprintf(full_path, sizeof(full_path), "%s/%s", dir, args[1]);
+
+            if (access(full_path, X_OK) == 0)
+            {
+                printf("%s is %s\n", args[1], full_path);
+                found = 1;
+                break;
+            }
+            dir = strtok(NULL, ":");
+        }
+
+        if (!found)
+        {
+            printf("%s: not found\n", args[1]);
+        }
+
+        free(path_copy);
+        return 1;
     }
 
     // Not a builtin
