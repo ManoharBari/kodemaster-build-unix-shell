@@ -116,32 +116,58 @@ int execute_external(char **args)
     // Check for output redirections
     char *stdout_file = NULL;
     char *stderr_file = NULL;
+    int stdout_append = 0;
+    int stderr_append = 0;
 
     for (int i = 0; args[i] != NULL; i++)
     {
-        if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0)
+        if (strcmp(args[i], ">>") == 0 || strcmp(args[i], "1>>") == 0)
         {
-            // Redirect stdout
+            // Append stdout
             if (args[i + 1] == NULL)
             {
                 fprintf(stderr, "syntax error: expected filename after %s\n", args[i]);
                 return 1;
             }
             stdout_file = args[i + 1];
+            stdout_append = 1;
             args[i] = NULL; // Truncate args at redirection operator
-            // Continue checking for more redirections
+        }
+        else if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0)
+        {
+            // Redirect stdout (truncate)
+            if (args[i + 1] == NULL)
+            {
+                fprintf(stderr, "syntax error: expected filename after %s\n", args[i]);
+                return 1;
+            }
+            stdout_file = args[i + 1];
+            stdout_append = 0;
+            args[i] = NULL; // Truncate args at redirection operator
+        }
+        else if (strcmp(args[i], "2>>") == 0)
+        {
+            // Append stderr
+            if (args[i + 1] == NULL)
+            {
+                fprintf(stderr, "syntax error: expected filename after 2>>\n");
+                return 1;
+            }
+            stderr_file = args[i + 1];
+            stderr_append = 1;
+            args[i] = NULL; // Truncate args at redirection operator
         }
         else if (strcmp(args[i], "2>") == 0)
         {
-            // Redirect stderr
+            // Redirect stderr (truncate)
             if (args[i + 1] == NULL)
             {
                 fprintf(stderr, "syntax error: expected filename after 2>\n");
                 return 1;
             }
             stderr_file = args[i + 1];
+            stderr_append = 0;
             args[i] = NULL; // Truncate args at redirection operator
-            // Continue checking for more redirections
         }
     }
 
@@ -154,7 +180,10 @@ int execute_external(char **args)
         // Handle stdout redirection if needed
         if (stdout_file != NULL)
         {
-            int fd = open(stdout_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int flags = O_WRONLY | O_CREAT;
+            flags |= stdout_append ? O_APPEND : O_TRUNC;
+
+            int fd = open(stdout_file, flags, 0644);
             if (fd < 0)
             {
                 perror("open");
@@ -175,7 +204,10 @@ int execute_external(char **args)
         // Handle stderr redirection if needed
         if (stderr_file != NULL)
         {
-            int fd = open(stderr_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int flags = O_WRONLY | O_CREAT;
+            flags |= stderr_append ? O_APPEND : O_TRUNC;
+
+            int fd = open(stderr_file, flags, 0644);
             if (fd < 0)
             {
                 perror("open");
@@ -218,10 +250,12 @@ int handle_builtin(char **args)
     // Check for output redirections in builtin commands
     char *stdout_file = NULL;
     char *stderr_file = NULL;
+    int stdout_append = 0;
+    int stderr_append = 0;
 
     for (int i = 0; args[i] != NULL; i++)
     {
-        if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0)
+        if (strcmp(args[i], ">>") == 0 || strcmp(args[i], "1>>") == 0)
         {
             if (args[i + 1] == NULL)
             {
@@ -229,6 +263,29 @@ int handle_builtin(char **args)
                 return 1;
             }
             stdout_file = args[i + 1];
+            stdout_append = 1;
+            args[i] = NULL;
+        }
+        else if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0)
+        {
+            if (args[i + 1] == NULL)
+            {
+                fprintf(stderr, "syntax error: expected filename after %s\n", args[i]);
+                return 1;
+            }
+            stdout_file = args[i + 1];
+            stdout_append = 0;
+            args[i] = NULL;
+        }
+        else if (strcmp(args[i], "2>>") == 0)
+        {
+            if (args[i + 1] == NULL)
+            {
+                fprintf(stderr, "syntax error: expected filename after 2>>\n");
+                return 1;
+            }
+            stderr_file = args[i + 1];
+            stderr_append = 1;
             args[i] = NULL;
         }
         else if (strcmp(args[i], "2>") == 0)
@@ -239,6 +296,7 @@ int handle_builtin(char **args)
                 return 1;
             }
             stderr_file = args[i + 1];
+            stderr_append = 0;
             args[i] = NULL;
         }
     }
@@ -251,7 +309,10 @@ int handle_builtin(char **args)
 
     if (stdout_file != NULL)
     {
-        fd_out = open(stdout_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int flags = O_WRONLY | O_CREAT;
+        flags |= stdout_append ? O_APPEND : O_TRUNC;
+
+        fd_out = open(stdout_file, flags, 0644);
         if (fd_out < 0)
         {
             perror("open");
@@ -273,7 +334,10 @@ int handle_builtin(char **args)
 
     if (stderr_file != NULL)
     {
-        fd_err = open(stderr_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        int flags = O_WRONLY | O_CREAT;
+        flags |= stderr_append ? O_APPEND : O_TRUNC;
+
+        fd_err = open(stderr_file, flags, 0644);
         if (fd_err < 0)
         {
             perror("open");
