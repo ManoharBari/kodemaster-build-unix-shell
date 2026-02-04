@@ -16,22 +16,49 @@ char **parse_line(char *line)
     int arg_idx = 0;
     int char_idx = 0;
     int in_single_quote = 0;
+    int in_double_quote = 0;
     int i = 0;
 
     while (line[i] != '\0' && arg_idx < MAX_ARGS - 1)
     {
         char c = line[i];
 
-        // Handle single quotes
-        if (c == '\'')
+        // Handle single quotes (only when not in double quotes)
+        if (c == '\'' && !in_double_quote)
         {
             in_single_quote = !in_single_quote;
             i++;
             continue; // Don't add the quote character itself
         }
 
-        // Handle whitespace (space and tab)
-        if (!in_single_quote && (c == ' ' || c == '\t'))
+        // Handle double quotes (only when not in single quotes)
+        if (c == '"' && !in_single_quote)
+        {
+            in_double_quote = !in_double_quote;
+            i++;
+            continue; // Don't add the quote character itself
+        }
+
+        // Handle escape sequences inside double quotes
+        if (c == '\\' && in_double_quote && !in_single_quote)
+        {
+            char next = line[i + 1];
+            // Only escape " and \ inside double quotes
+            if (next == '"' || next == '\\')
+            {
+                if (char_idx < BUFFER_SIZE - 1)
+                {
+                    tokens[arg_idx][char_idx++] = next;
+                }
+                i += 2; // Skip both the backslash and the next character
+                continue;
+            }
+            // For other characters after \, treat backslash literally
+            // (fall through to add the backslash normally)
+        }
+
+        // Handle whitespace (space and tab) - only as delimiter outside quotes
+        if (!in_single_quote && !in_double_quote && (c == ' ' || c == '\t'))
         {
             // End current token if we have one
             if (char_idx > 0)
