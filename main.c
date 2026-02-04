@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
 #define BUFFER_SIZE 1024
 #define MAX_ARGS 64
@@ -46,6 +47,7 @@ char **parse_line(char *line)
 
             if (in_double_quote)
             {
+                // Inside double quotes: only escape " and \
                 if (next == '"' || next == '\\')
                 {
                     if (char_idx < BUFFER_SIZE - 1)
@@ -111,10 +113,53 @@ char **parse_line(char *line)
 
 int execute_external(char **args)
 {
+    // Check for output redirection
+    char *redirect_file = NULL;
+
+    for (int i = 0; args[i] != NULL; i++)
+    {
+        if (strcmp(args[i], ">") == 0)
+        {
+            // Found redirection operator
+            if (args[i + 1] == NULL)
+            {
+                fprintf(stderr, "syntax error: expected filename after >\n");
+                return 1;
+            }
+            redirect_file = args[i + 1];
+            args[i] = NULL; // Truncate args at redirection operator
+            break;
+        }
+    }
+
     pid_t pid = fork();
 
     if (pid == 0)
     {
+        // Child process
+
+        // Handle output redirection if needed
+        if (redirect_file != NULL)
+        {
+            int fd = open(redirect_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0)
+            {
+                perror("open");
+                exit(1);
+            }
+
+            // Redirect stdout to the file
+            if (dup2(fd, STDOUT_FILENO) < 0)
+            {
+                perror("dup2");
+                close(fd);
+                exit(1);
+            }
+
+            close(fd);
+        }
+
+        // Execute the command
         if (execvp(args[0], args) == -1)
         {
             fprintf(stderr, "%s: command not found\n", args[0]);
@@ -136,6 +181,52 @@ int execute_external(char **args)
 
 int handle_builtin(char **args)
 {
+    // Check for output redirection in builtin commands
+    char *redirect_file = NULL;
+
+    for (int i = 0; args[i] != NULL; i++)
+    {
+        if (strcmp(args[i], ">") == 0)
+        {
+            if (args[i + 1] == NULL)
+            {
+                fprintf(stderr, "syntax error: expected filename after >\n");
+                return 1;
+            }
+            redirect_file = args[i + 1];
+            args[i] = NULL;
+            break;
+        }
+    }
+
+    // Handle output redirection for builtins
+    int saved_stdout = -1;
+    int fd = -1;
+
+    if (redirect_file != NULL)
+    {
+        fd = open(redirect_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd < 0)
+        {
+            perror("open");
+            return 1;
+        }
+
+        // Save current stdout and redirect
+        saved_stdout = dup(STDOUT_FILENO);
+        if (dup2(fd, STDOUT_FILENO) < 0)
+        {
+            perror("dup2");
+            close(fd);
+            if (saved_stdout >= 0)
+                close(saved_stdout);
+            return 1;
+        }
+        close(fd);
+    }
+
+    int result = -1;
+
     // exit [code]
     if (strcmp(args[0], "exit") == 0)
     {
@@ -160,7 +251,7 @@ int handle_builtin(char **args)
             printf("%s", args[i]);
         }
         printf("\n"); // Newline at the end
-        return 1;     // Continue shell loop
+        result = 1;
     }
 
     // pwd
@@ -175,7 +266,7 @@ int handle_builtin(char **args)
         {
             perror("pwd");
         }
-        return 1;
+        result = 1;
     }
 
     // cd [directory]
@@ -190,7 +281,8 @@ int handle_builtin(char **args)
             if (path == NULL)
             {
                 fprintf(stderr, "cd: HOME not set\n");
-                return 1;
+                result = 1;
+                goto cleanup;
             }
         }
         // Handle ~ (home directory)
@@ -200,7 +292,8 @@ int handle_builtin(char **args)
             if (path == NULL)
             {
                 fprintf(stderr, "cd: HOME not set\n");
-                return 1;
+                result = 1;
+                goto cleanup;
             }
         }
         else
@@ -214,7 +307,7 @@ int handle_builtin(char **args)
             perror("cd");
         }
 
-        return 1;
+        result = 1;
     }
 
     // type <command>
@@ -223,7 +316,8 @@ int handle_builtin(char **args)
         if (args[1] == NULL)
         {
             fprintf(stderr, "type: missing argument\n");
-            return 1;
+            result = 1;
+            goto cleanup;
         }
 
         // Check if it's a builtin
@@ -234,7 +328,8 @@ int handle_builtin(char **args)
             strcmp(args[1], "type") == 0)
         {
             printf("%s is a shell builtin\n", args[1]);
-            return 1;
+            result = 1;
+            goto cleanup;
         }
 
         // Check if it's in PATH
@@ -242,14 +337,16 @@ int handle_builtin(char **args)
         if (path == NULL)
         {
             printf("%s: not found\n", args[1]);
-            return 1;
+            result = 1;
+            goto cleanup;
         }
 
         char *path_copy = strdup(path);
         if (path_copy == NULL)
         {
             perror("strdup");
-            return 1;
+            result = 1;
+            goto cleanup;
         }
 
         char *dir = strtok(path_copy, ":");
@@ -275,11 +372,18 @@ int handle_builtin(char **args)
         }
 
         free(path_copy);
-        return 1;
+        result = 1;
     }
 
-    // Not a builtin
-    return -1;
+cleanup:
+    // Restore stdout if it was redirected
+    if (saved_stdout >= 0)
+    {
+        dup2(saved_stdout, STDOUT_FILENO);
+        close(saved_stdout);
+    }
+
+    return result;
 }
 
 int execute(char **args)
