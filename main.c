@@ -105,15 +105,22 @@ int main(void)
     char input[BUFFER_SIZE];
     char **args;
     int status = 1;
+    int interactive = isatty(STDIN_FILENO);
 
     while (status)
     {
-        printf("$ ");
-        fflush(stdout);
+        if (interactive)
+        {
+            printf("$ ");
+            fflush(stdout);
+        }
 
         if (fgets(input, BUFFER_SIZE, stdin) == NULL)
         {
-            printf("\n");
+            if (interactive)
+            {
+                printf("\n");
+            }
             break;
         }
 
