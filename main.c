@@ -113,22 +113,35 @@ char **parse_line(char *line)
 
 int execute_external(char **args)
 {
-    // Check for output redirection
-    char *redirect_file = NULL;
+    // Check for output redirections
+    char *stdout_file = NULL;
+    char *stderr_file = NULL;
 
     for (int i = 0; args[i] != NULL; i++)
     {
-        if (strcmp(args[i], ">") == 0)
+        if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0)
         {
-            // Found redirection operator
+            // Redirect stdout
             if (args[i + 1] == NULL)
             {
-                fprintf(stderr, "syntax error: expected filename after >\n");
+                fprintf(stderr, "syntax error: expected filename after %s\n", args[i]);
                 return 1;
             }
-            redirect_file = args[i + 1];
+            stdout_file = args[i + 1];
             args[i] = NULL; // Truncate args at redirection operator
-            break;
+            // Continue checking for more redirections
+        }
+        else if (strcmp(args[i], "2>") == 0)
+        {
+            // Redirect stderr
+            if (args[i + 1] == NULL)
+            {
+                fprintf(stderr, "syntax error: expected filename after 2>\n");
+                return 1;
+            }
+            stderr_file = args[i + 1];
+            args[i] = NULL; // Truncate args at redirection operator
+            // Continue checking for more redirections
         }
     }
 
@@ -138,10 +151,10 @@ int execute_external(char **args)
     {
         // Child process
 
-        // Handle output redirection if needed
-        if (redirect_file != NULL)
+        // Handle stdout redirection if needed
+        if (stdout_file != NULL)
         {
-            int fd = open(redirect_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int fd = open(stdout_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
             if (fd < 0)
             {
                 perror("open");
@@ -150,6 +163,27 @@ int execute_external(char **args)
 
             // Redirect stdout to the file
             if (dup2(fd, STDOUT_FILENO) < 0)
+            {
+                perror("dup2");
+                close(fd);
+                exit(1);
+            }
+
+            close(fd);
+        }
+
+        // Handle stderr redirection if needed
+        if (stderr_file != NULL)
+        {
+            int fd = open(stderr_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0)
+            {
+                perror("open");
+                exit(1);
+            }
+
+            // Redirect stderr to the file
+            if (dup2(fd, STDERR_FILENO) < 0)
             {
                 perror("dup2");
                 close(fd);
@@ -181,32 +215,44 @@ int execute_external(char **args)
 
 int handle_builtin(char **args)
 {
-    // Check for output redirection in builtin commands
-    char *redirect_file = NULL;
+    // Check for output redirections in builtin commands
+    char *stdout_file = NULL;
+    char *stderr_file = NULL;
 
     for (int i = 0; args[i] != NULL; i++)
     {
-        if (strcmp(args[i], ">") == 0)
+        if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0)
         {
             if (args[i + 1] == NULL)
             {
-                fprintf(stderr, "syntax error: expected filename after >\n");
+                fprintf(stderr, "syntax error: expected filename after %s\n", args[i]);
                 return 1;
             }
-            redirect_file = args[i + 1];
+            stdout_file = args[i + 1];
             args[i] = NULL;
-            break;
+        }
+        else if (strcmp(args[i], "2>") == 0)
+        {
+            if (args[i + 1] == NULL)
+            {
+                fprintf(stderr, "syntax error: expected filename after 2>\n");
+                return 1;
+            }
+            stderr_file = args[i + 1];
+            args[i] = NULL;
         }
     }
 
     // Handle output redirection for builtins
     int saved_stdout = -1;
-    int fd = -1;
+    int saved_stderr = -1;
+    int fd_out = -1;
+    int fd_err = -1;
 
-    if (redirect_file != NULL)
+    if (stdout_file != NULL)
     {
-        fd = open(redirect_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0)
+        fd_out = open(stdout_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd_out < 0)
         {
             perror("open");
             return 1;
@@ -214,15 +260,47 @@ int handle_builtin(char **args)
 
         // Save current stdout and redirect
         saved_stdout = dup(STDOUT_FILENO);
-        if (dup2(fd, STDOUT_FILENO) < 0)
+        if (dup2(fd_out, STDOUT_FILENO) < 0)
         {
             perror("dup2");
-            close(fd);
+            close(fd_out);
             if (saved_stdout >= 0)
                 close(saved_stdout);
             return 1;
         }
-        close(fd);
+        close(fd_out);
+    }
+
+    if (stderr_file != NULL)
+    {
+        fd_err = open(stderr_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (fd_err < 0)
+        {
+            perror("open");
+            if (saved_stdout >= 0)
+            {
+                dup2(saved_stdout, STDOUT_FILENO);
+                close(saved_stdout);
+            }
+            return 1;
+        }
+
+        // Save current stderr and redirect
+        saved_stderr = dup(STDERR_FILENO);
+        if (dup2(fd_err, STDERR_FILENO) < 0)
+        {
+            perror("dup2");
+            close(fd_err);
+            if (saved_stderr >= 0)
+                close(saved_stderr);
+            if (saved_stdout >= 0)
+            {
+                dup2(saved_stdout, STDOUT_FILENO);
+                close(saved_stdout);
+            }
+            return 1;
+        }
+        close(fd_err);
     }
 
     int result = -1;
@@ -381,6 +459,13 @@ cleanup:
     {
         dup2(saved_stdout, STDOUT_FILENO);
         close(saved_stdout);
+    }
+
+    // Restore stderr if it was redirected
+    if (saved_stderr >= 0)
+    {
+        dup2(saved_stderr, STDERR_FILENO);
+        close(saved_stderr);
     }
 
     return result;
