@@ -94,6 +94,45 @@ int handle_builtin(char **args)
         return 1;
     }
 
+    // cd [directory]
+    if (strcmp(args[0], "cd") == 0)
+    {
+        char *path;
+
+        // No argument: go to HOME
+        if (args[1] == NULL)
+        {
+            path = getenv("HOME");
+            if (path == NULL)
+            {
+                fprintf(stderr, "cd: HOME not set\n");
+                return 1;
+            }
+        }
+        // Handle ~ (home directory)
+        else if (strcmp(args[1], "~") == 0)
+        {
+            path = getenv("HOME");
+            if (path == NULL)
+            {
+                fprintf(stderr, "cd: HOME not set\n");
+                return 1;
+            }
+        }
+        else
+        {
+            path = args[1];
+        }
+
+        // Change directory
+        if (chdir(path) != 0)
+        {
+            perror("cd");
+        }
+
+        return 1;
+    }
+
     // type <command>
     if (strcmp(args[0], "type") == 0)
     {
@@ -107,6 +146,7 @@ int handle_builtin(char **args)
         if (strcmp(args[1], "exit") == 0 ||
             strcmp(args[1], "echo") == 0 ||
             strcmp(args[1], "pwd") == 0 ||
+            strcmp(args[1], "cd") == 0 ||
             strcmp(args[1], "type") == 0)
         {
             printf("%s is a shell builtin\n", args[1]);
