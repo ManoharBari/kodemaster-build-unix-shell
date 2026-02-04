@@ -39,22 +39,39 @@ char **parse_line(char *line)
             continue; // Don't add the quote character itself
         }
 
-        // Handle escape sequences inside double quotes
-        if (c == '\\' && in_double_quote && !in_single_quote)
+        // Handle backslash escapes
+        if (c == '\\' && !in_single_quote)
         {
             char next = line[i + 1];
-            // Only escape " and \ inside double quotes
-            if (next == '"' || next == '\\')
+
+            if (in_double_quote)
             {
-                if (char_idx < BUFFER_SIZE - 1)
+                if (next == '"' || next == '\\')
                 {
-                    tokens[arg_idx][char_idx++] = next;
+                    if (char_idx < BUFFER_SIZE - 1)
+                    {
+                        tokens[arg_idx][char_idx++] = next;
+                    }
+                    i += 2; // Skip both the backslash and the next character
+                    continue;
                 }
-                i += 2; // Skip both the backslash and the next character
-                continue;
+                // For other characters after \, treat backslash literally
+                // (fall through to add the backslash normally)
             }
-            // For other characters after \, treat backslash literally
-            // (fall through to add the backslash normally)
+            else
+            {
+                // Outside quotes: backslash escapes any next character
+                if (next != '\0')
+                {
+                    if (char_idx < BUFFER_SIZE - 1)
+                    {
+                        tokens[arg_idx][char_idx++] = next;
+                    }
+                    i += 2; // Skip both the backslash and the next character
+                    continue;
+                }
+                // If backslash is at end of line, just add it
+            }
         }
 
         // Handle whitespace (space and tab) - only as delimiter outside quotes
