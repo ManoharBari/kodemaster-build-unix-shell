@@ -12,16 +12,56 @@
 char **parse_line(char *line)
 {
     static char *args[MAX_ARGS];
+    static char tokens[MAX_ARGS][BUFFER_SIZE];
+    int arg_idx = 0;
+    int char_idx = 0;
+    int in_single_quote = 0;
     int i = 0;
 
-    char *token = strtok(line, DELIMITERS);
-    while (token != NULL && i < MAX_ARGS - 1)
+    while (line[i] != '\0' && arg_idx < MAX_ARGS - 1)
     {
-        args[i++] = token;
-        token = strtok(NULL, DELIMITERS);
-    }
-    args[i] = NULL;
+        char c = line[i];
 
+        // Handle single quotes
+        if (c == '\'')
+        {
+            in_single_quote = !in_single_quote;
+            i++;
+            continue; // Don't add the quote character itself
+        }
+
+        // Handle whitespace (space and tab)
+        if (!in_single_quote && (c == ' ' || c == '\t'))
+        {
+            // End current token if we have one
+            if (char_idx > 0)
+            {
+                tokens[arg_idx][char_idx] = '\0';
+                args[arg_idx] = tokens[arg_idx];
+                arg_idx++;
+                char_idx = 0;
+            }
+            i++;
+            continue;
+        }
+
+        // Add character to current token
+        if (char_idx < BUFFER_SIZE - 1)
+        {
+            tokens[arg_idx][char_idx++] = c;
+        }
+        i++;
+    }
+
+    // Handle last token if any
+    if (char_idx > 0)
+    {
+        tokens[arg_idx][char_idx] = '\0';
+        args[arg_idx] = tokens[arg_idx];
+        arg_idx++;
+    }
+
+    args[arg_idx] = NULL;
     return args;
 }
 
