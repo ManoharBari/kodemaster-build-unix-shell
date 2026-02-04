@@ -8,7 +8,17 @@
 
 #define BUFFER_SIZE 1024
 #define MAX_ARGS 64
+#define MAX_COMMANDS 64
 #define DELIMITERS " \t\r\n"
+
+typedef struct
+{
+    char **args;
+    char *stdout_file;
+    char *stderr_file;
+    int stdout_append;
+    int stderr_append;
+} Command;
 
 char **parse_line(char *line)
 {
@@ -29,7 +39,7 @@ char **parse_line(char *line)
         {
             in_single_quote = !in_single_quote;
             i++;
-            continue; // Don't add the quote character itself
+            continue;
         }
 
         // Handle double quotes (only when not in single quotes)
@@ -37,7 +47,7 @@ char **parse_line(char *line)
         {
             in_double_quote = !in_double_quote;
             i++;
-            continue; // Don't add the quote character itself
+            continue;
         }
 
         // Handle backslash escapes
@@ -47,39 +57,33 @@ char **parse_line(char *line)
 
             if (in_double_quote)
             {
-                // Inside double quotes: only escape " and \
                 if (next == '"' || next == '\\')
                 {
                     if (char_idx < BUFFER_SIZE - 1)
                     {
                         tokens[arg_idx][char_idx++] = next;
                     }
-                    i += 2; // Skip both the backslash and the next character
+                    i += 2;
                     continue;
                 }
-                // For other characters after \, treat backslash literally
-                // (fall through to add the backslash normally)
             }
             else
             {
-                // Outside quotes: backslash escapes any next character
                 if (next != '\0')
                 {
                     if (char_idx < BUFFER_SIZE - 1)
                     {
                         tokens[arg_idx][char_idx++] = next;
                     }
-                    i += 2; // Skip both the backslash and the next character
+                    i += 2;
                     continue;
                 }
-                // If backslash is at end of line, just add it
             }
         }
 
         // Handle whitespace (space and tab) - only as delimiter outside quotes
         if (!in_single_quote && !in_double_quote && (c == ' ' || c == '\t'))
         {
-            // End current token if we have one
             if (char_idx > 0)
             {
                 tokens[arg_idx][char_idx] = '\0';
@@ -111,234 +115,95 @@ char **parse_line(char *line)
     return args;
 }
 
-int execute_external(char **args)
+void parse_redirections(Command *cmd)
 {
-    // Check for output redirections
-    char *stdout_file = NULL;
-    char *stderr_file = NULL;
-    int stdout_append = 0;
-    int stderr_append = 0;
+    cmd->stdout_file = NULL;
+    cmd->stderr_file = NULL;
+    cmd->stdout_append = 0;
+    cmd->stderr_append = 0;
 
-    for (int i = 0; args[i] != NULL; i++)
+    for (int i = 0; cmd->args[i] != NULL; i++)
     {
-        if (strcmp(args[i], ">>") == 0 || strcmp(args[i], "1>>") == 0)
+        if (strcmp(cmd->args[i], ">>") == 0 || strcmp(cmd->args[i], "1>>") == 0)
         {
-            // Append stdout
-            if (args[i + 1] == NULL)
+            if (cmd->args[i + 1] != NULL)
             {
-                fprintf(stderr, "syntax error: expected filename after %s\n", args[i]);
-                return 1;
+                cmd->stdout_file = cmd->args[i + 1];
+                cmd->stdout_append = 1;
+                cmd->args[i] = NULL;
             }
-            stdout_file = args[i + 1];
-            stdout_append = 1;
-            args[i] = NULL; // Truncate args at redirection operator
         }
-        else if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0)
+        else if (strcmp(cmd->args[i], ">") == 0 || strcmp(cmd->args[i], "1>") == 0)
         {
-            // Redirect stdout (truncate)
-            if (args[i + 1] == NULL)
+            if (cmd->args[i + 1] != NULL)
             {
-                fprintf(stderr, "syntax error: expected filename after %s\n", args[i]);
-                return 1;
+                cmd->stdout_file = cmd->args[i + 1];
+                cmd->stdout_append = 0;
+                cmd->args[i] = NULL;
             }
-            stdout_file = args[i + 1];
-            stdout_append = 0;
-            args[i] = NULL; // Truncate args at redirection operator
         }
-        else if (strcmp(args[i], "2>>") == 0)
+        else if (strcmp(cmd->args[i], "2>>") == 0)
         {
-            // Append stderr
-            if (args[i + 1] == NULL)
+            if (cmd->args[i + 1] != NULL)
             {
-                fprintf(stderr, "syntax error: expected filename after 2>>\n");
-                return 1;
+                cmd->stderr_file = cmd->args[i + 1];
+                cmd->stderr_append = 1;
+                cmd->args[i] = NULL;
             }
-            stderr_file = args[i + 1];
-            stderr_append = 1;
-            args[i] = NULL; // Truncate args at redirection operator
         }
-        else if (strcmp(args[i], "2>") == 0)
+        else if (strcmp(cmd->args[i], "2>") == 0)
         {
-            // Redirect stderr (truncate)
-            if (args[i + 1] == NULL)
+            if (cmd->args[i + 1] != NULL)
             {
-                fprintf(stderr, "syntax error: expected filename after 2>\n");
-                return 1;
+                cmd->stderr_file = cmd->args[i + 1];
+                cmd->stderr_append = 0;
+                cmd->args[i] = NULL;
             }
-            stderr_file = args[i + 1];
-            stderr_append = 0;
-            args[i] = NULL; // Truncate args at redirection operator
         }
     }
-
-    pid_t pid = fork();
-
-    if (pid == 0)
-    {
-        // Child process
-
-        // Handle stdout redirection if needed
-        if (stdout_file != NULL)
-        {
-            int flags = O_WRONLY | O_CREAT;
-            flags |= stdout_append ? O_APPEND : O_TRUNC;
-
-            int fd = open(stdout_file, flags, 0644);
-            if (fd < 0)
-            {
-                perror("open");
-                exit(1);
-            }
-
-            // Redirect stdout to the file
-            if (dup2(fd, STDOUT_FILENO) < 0)
-            {
-                perror("dup2");
-                close(fd);
-                exit(1);
-            }
-
-            close(fd);
-        }
-
-        // Handle stderr redirection if needed
-        if (stderr_file != NULL)
-        {
-            int flags = O_WRONLY | O_CREAT;
-            flags |= stderr_append ? O_APPEND : O_TRUNC;
-
-            int fd = open(stderr_file, flags, 0644);
-            if (fd < 0)
-            {
-                perror("open");
-                exit(1);
-            }
-
-            // Redirect stderr to the file
-            if (dup2(fd, STDERR_FILENO) < 0)
-            {
-                perror("dup2");
-                close(fd);
-                exit(1);
-            }
-
-            close(fd);
-        }
-
-        // Execute the command
-        if (execvp(args[0], args) == -1)
-        {
-            fprintf(stderr, "%s: command not found\n", args[0]);
-            exit(127);
-        }
-    }
-    else if (pid > 0)
-    {
-        int status;
-        waitpid(pid, &status, 0);
-    }
-    else
-    {
-        perror("fork");
-    }
-
-    return 1;
 }
 
-int handle_builtin(char **args)
+int is_builtin(char *cmd)
 {
-    // Check for output redirections in builtin commands
-    char *stdout_file = NULL;
-    char *stderr_file = NULL;
-    int stdout_append = 0;
-    int stderr_append = 0;
+    return (strcmp(cmd, "exit") == 0 ||
+            strcmp(cmd, "echo") == 0 ||
+            strcmp(cmd, "pwd") == 0 ||
+            strcmp(cmd, "cd") == 0 ||
+            strcmp(cmd, "type") == 0);
+}
 
-    for (int i = 0; args[i] != NULL; i++)
-    {
-        if (strcmp(args[i], ">>") == 0 || strcmp(args[i], "1>>") == 0)
-        {
-            if (args[i + 1] == NULL)
-            {
-                fprintf(stderr, "syntax error: expected filename after %s\n", args[i]);
-                return 1;
-            }
-            stdout_file = args[i + 1];
-            stdout_append = 1;
-            args[i] = NULL;
-        }
-        else if (strcmp(args[i], ">") == 0 || strcmp(args[i], "1>") == 0)
-        {
-            if (args[i + 1] == NULL)
-            {
-                fprintf(stderr, "syntax error: expected filename after %s\n", args[i]);
-                return 1;
-            }
-            stdout_file = args[i + 1];
-            stdout_append = 0;
-            args[i] = NULL;
-        }
-        else if (strcmp(args[i], "2>>") == 0)
-        {
-            if (args[i + 1] == NULL)
-            {
-                fprintf(stderr, "syntax error: expected filename after 2>>\n");
-                return 1;
-            }
-            stderr_file = args[i + 1];
-            stderr_append = 1;
-            args[i] = NULL;
-        }
-        else if (strcmp(args[i], "2>") == 0)
-        {
-            if (args[i + 1] == NULL)
-            {
-                fprintf(stderr, "syntax error: expected filename after 2>\n");
-                return 1;
-            }
-            stderr_file = args[i + 1];
-            stderr_append = 0;
-            args[i] = NULL;
-        }
-    }
+int execute_builtin(Command *cmd)
+{
+    char **args = cmd->args;
 
     // Handle output redirection for builtins
     int saved_stdout = -1;
     int saved_stderr = -1;
-    int fd_out = -1;
-    int fd_err = -1;
 
-    if (stdout_file != NULL)
+    if (cmd->stdout_file != NULL)
     {
         int flags = O_WRONLY | O_CREAT;
-        flags |= stdout_append ? O_APPEND : O_TRUNC;
+        flags |= cmd->stdout_append ? O_APPEND : O_TRUNC;
 
-        fd_out = open(stdout_file, flags, 0644);
-        if (fd_out < 0)
+        int fd = open(cmd->stdout_file, flags, 0644);
+        if (fd < 0)
         {
             perror("open");
             return 1;
         }
 
-        // Save current stdout and redirect
         saved_stdout = dup(STDOUT_FILENO);
-        if (dup2(fd_out, STDOUT_FILENO) < 0)
-        {
-            perror("dup2");
-            close(fd_out);
-            if (saved_stdout >= 0)
-                close(saved_stdout);
-            return 1;
-        }
-        close(fd_out);
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
     }
 
-    if (stderr_file != NULL)
+    if (cmd->stderr_file != NULL)
     {
         int flags = O_WRONLY | O_CREAT;
-        flags |= stderr_append ? O_APPEND : O_TRUNC;
+        flags |= cmd->stderr_append ? O_APPEND : O_TRUNC;
 
-        fd_err = open(stderr_file, flags, 0644);
-        if (fd_err < 0)
+        int fd = open(cmd->stderr_file, flags, 0644);
+        if (fd < 0)
         {
             perror("open");
             if (saved_stdout >= 0)
@@ -349,27 +214,13 @@ int handle_builtin(char **args)
             return 1;
         }
 
-        // Save current stderr and redirect
         saved_stderr = dup(STDERR_FILENO);
-        if (dup2(fd_err, STDERR_FILENO) < 0)
-        {
-            perror("dup2");
-            close(fd_err);
-            if (saved_stderr >= 0)
-                close(saved_stderr);
-            if (saved_stdout >= 0)
-            {
-                dup2(saved_stdout, STDOUT_FILENO);
-                close(saved_stdout);
-            }
-            return 1;
-        }
-        close(fd_err);
+        dup2(fd, STDERR_FILENO);
+        close(fd);
     }
 
-    int result = -1;
+    int result = 1;
 
-    // exit [code]
     if (strcmp(args[0], "exit") == 0)
     {
         int exit_code = 0;
@@ -379,25 +230,19 @@ int handle_builtin(char **args)
         }
         exit(exit_code);
     }
-
-    // echo [args...]
-    if (strcmp(args[0], "echo") == 0)
+    else if (strcmp(args[0], "echo") == 0)
     {
-        // Print all arguments after "echo", separated by spaces
         for (int i = 1; args[i] != NULL; i++)
         {
             if (i > 1)
             {
-                printf(" "); // Space between arguments
+                printf(" ");
             }
             printf("%s", args[i]);
         }
-        printf("\n"); // Newline at the end
-        result = 1;
+        printf("\n");
     }
-
-    // pwd
-    if (strcmp(args[0], "pwd") == 0)
+    else if (strcmp(args[0], "pwd") == 0)
     {
         char cwd[BUFFER_SIZE];
         if (getcwd(cwd, sizeof(cwd)) != NULL)
@@ -408,33 +253,26 @@ int handle_builtin(char **args)
         {
             perror("pwd");
         }
-        result = 1;
     }
-
-    // cd [directory]
-    if (strcmp(args[0], "cd") == 0)
+    else if (strcmp(args[0], "cd") == 0)
     {
         char *path;
 
-        // No argument: go to HOME
         if (args[1] == NULL)
         {
             path = getenv("HOME");
             if (path == NULL)
             {
                 fprintf(stderr, "cd: HOME not set\n");
-                result = 1;
                 goto cleanup;
             }
         }
-        // Handle ~ (home directory)
         else if (strcmp(args[1], "~") == 0)
         {
             path = getenv("HOME");
             if (path == NULL)
             {
                 fprintf(stderr, "cd: HOME not set\n");
-                result = 1;
                 goto cleanup;
             }
         }
@@ -443,43 +281,29 @@ int handle_builtin(char **args)
             path = args[1];
         }
 
-        // Change directory
         if (chdir(path) != 0)
         {
             perror("cd");
         }
-
-        result = 1;
     }
-
-    // type <command>
-    if (strcmp(args[0], "type") == 0)
+    else if (strcmp(args[0], "type") == 0)
     {
         if (args[1] == NULL)
         {
             fprintf(stderr, "type: missing argument\n");
-            result = 1;
             goto cleanup;
         }
 
-        // Check if it's a builtin
-        if (strcmp(args[1], "exit") == 0 ||
-            strcmp(args[1], "echo") == 0 ||
-            strcmp(args[1], "pwd") == 0 ||
-            strcmp(args[1], "cd") == 0 ||
-            strcmp(args[1], "type") == 0)
+        if (is_builtin(args[1]))
         {
             printf("%s is a shell builtin\n", args[1]);
-            result = 1;
             goto cleanup;
         }
 
-        // Check if it's in PATH
         char *path = getenv("PATH");
         if (path == NULL)
         {
             printf("%s: not found\n", args[1]);
-            result = 1;
             goto cleanup;
         }
 
@@ -487,7 +311,6 @@ int handle_builtin(char **args)
         if (path_copy == NULL)
         {
             perror("strdup");
-            result = 1;
             goto cleanup;
         }
 
@@ -514,18 +337,15 @@ int handle_builtin(char **args)
         }
 
         free(path_copy);
-        result = 1;
     }
 
 cleanup:
-    // Restore stdout if it was redirected
     if (saved_stdout >= 0)
     {
         dup2(saved_stdout, STDOUT_FILENO);
         close(saved_stdout);
     }
 
-    // Restore stderr if it was redirected
     if (saved_stderr >= 0)
     {
         dup2(saved_stderr, STDERR_FILENO);
@@ -535,6 +355,150 @@ cleanup:
     return result;
 }
 
+void execute_command(Command *cmd, int input_fd, int output_fd)
+{
+    // Handle redirections
+    if (input_fd != STDIN_FILENO)
+    {
+        dup2(input_fd, STDIN_FILENO);
+        close(input_fd);
+    }
+
+    if (output_fd != STDOUT_FILENO)
+    {
+        dup2(output_fd, STDOUT_FILENO);
+        close(output_fd);
+    }
+
+    // Handle file redirections
+    if (cmd->stdout_file != NULL)
+    {
+        int flags = O_WRONLY | O_CREAT;
+        flags |= cmd->stdout_append ? O_APPEND : O_TRUNC;
+
+        int fd = open(cmd->stdout_file, flags, 0644);
+        if (fd < 0)
+        {
+            perror("open");
+            exit(1);
+        }
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+    }
+
+    if (cmd->stderr_file != NULL)
+    {
+        int flags = O_WRONLY | O_CREAT;
+        flags |= cmd->stderr_append ? O_APPEND : O_TRUNC;
+
+        int fd = open(cmd->stderr_file, flags, 0644);
+        if (fd < 0)
+        {
+            perror("open");
+            exit(1);
+        }
+        dup2(fd, STDERR_FILENO);
+        close(fd);
+    }
+
+    // Execute the command
+    execvp(cmd->args[0], cmd->args);
+    fprintf(stderr, "%s: command not found\n", cmd->args[0]);
+    exit(127);
+}
+
+int execute_pipeline(Command *commands, int num_commands)
+{
+    // Handle single command without pipes
+    if (num_commands == 1)
+    {
+        if (is_builtin(commands[0].args[0]))
+        {
+            return execute_builtin(&commands[0]);
+        }
+
+        pid_t pid = fork();
+        if (pid == 0)
+        {
+            execute_command(&commands[0], STDIN_FILENO, STDOUT_FILENO);
+        }
+        else if (pid > 0)
+        {
+            int status;
+            waitpid(pid, &status, 0);
+        }
+        else
+        {
+            perror("fork");
+        }
+        return 1;
+    }
+
+    // Handle pipeline
+    int prev_pipe_read = STDIN_FILENO;
+    pid_t pids[MAX_COMMANDS];
+
+    for (int i = 0; i < num_commands; i++)
+    {
+        int pipe_fd[2];
+
+        // Create pipe for all but the last command
+        if (i < num_commands - 1)
+        {
+            if (pipe(pipe_fd) < 0)
+            {
+                perror("pipe");
+                return 1;
+            }
+        }
+
+        pids[i] = fork();
+
+        if (pids[i] == 0)
+        {
+            // Child process
+            int input_fd = prev_pipe_read;
+            int output_fd = (i < num_commands - 1) ? pipe_fd[1] : STDOUT_FILENO;
+
+            // Close unused pipe end
+            if (i < num_commands - 1)
+            {
+                close(pipe_fd[0]);
+            }
+
+            execute_command(&commands[i], input_fd, output_fd);
+        }
+        else if (pids[i] < 0)
+        {
+            perror("fork");
+            return 1;
+        }
+
+        // Parent process
+        // Close the previous pipe's read end
+        if (prev_pipe_read != STDIN_FILENO)
+        {
+            close(prev_pipe_read);
+        }
+
+        // Close the write end of current pipe
+        if (i < num_commands - 1)
+        {
+            close(pipe_fd[1]);
+            prev_pipe_read = pipe_fd[0];
+        }
+    }
+
+    // Wait for all children
+    for (int i = 0; i < num_commands; i++)
+    {
+        int status;
+        waitpid(pids[i], &status, 0);
+    }
+
+    return 1;
+}
+
 int execute(char **args)
 {
     if (args[0] == NULL)
@@ -542,15 +506,40 @@ int execute(char **args)
         return 1;
     }
 
-    // Try builtins first
-    int result = handle_builtin(args);
-    if (result != -1)
+    // Split commands by pipe
+    static Command commands[MAX_COMMANDS];
+    int num_commands = 0;
+    int arg_start = 0;
+
+    for (int i = 0; args[i] != NULL || arg_start <= i; i++)
     {
-        return result;
+        if (args[i] == NULL || strcmp(args[i], "|") == 0)
+        {
+            if (i > arg_start)
+            {
+                commands[num_commands].args = &args[arg_start];
+                if (args[i] != NULL && strcmp(args[i], "|") == 0)
+                {
+                    args[i] = NULL; // Null-terminate this command
+                }
+                parse_redirections(&commands[num_commands]);
+                num_commands++;
+                arg_start = i + 1;
+            }
+
+            if (args[i] == NULL)
+            {
+                break;
+            }
+        }
     }
 
-    // Execute as external command
-    return execute_external(args);
+    if (num_commands == 0)
+    {
+        return 1;
+    }
+
+    return execute_pipeline(commands, num_commands);
 }
 
 int main(void)
