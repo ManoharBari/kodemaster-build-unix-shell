@@ -79,6 +79,21 @@ int handle_builtin(char **args)
         return 1;     // Continue shell loop
     }
 
+    // pwd
+    if (strcmp(args[0], "pwd") == 0)
+    {
+        char cwd[BUFFER_SIZE];
+        if (getcwd(cwd, sizeof(cwd)) != NULL)
+        {
+            printf("%s\n", cwd);
+        }
+        else
+        {
+            perror("pwd");
+        }
+        return 1;
+    }
+
     // type <command>
     if (strcmp(args[0], "type") == 0)
     {
@@ -91,6 +106,7 @@ int handle_builtin(char **args)
         // Check if it's a builtin
         if (strcmp(args[1], "exit") == 0 ||
             strcmp(args[1], "echo") == 0 ||
+            strcmp(args[1], "pwd") == 0 ||
             strcmp(args[1], "type") == 0)
         {
             printf("%s is a shell builtin\n", args[1]);
