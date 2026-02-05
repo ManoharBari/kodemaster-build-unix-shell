@@ -14,6 +14,7 @@
 typedef struct
 {
     char **args;
+    char *stdin_file;
     char *stdout_file;
     char *stderr_file;
     int stdout_append;
@@ -117,6 +118,7 @@ char **parse_line(char *line)
 
 void parse_redirections(Command *cmd)
 {
+    cmd->stdin_file = NULL;
     cmd->stdout_file = NULL;
     cmd->stderr_file = NULL;
     cmd->stdout_append = 0;
@@ -124,7 +126,16 @@ void parse_redirections(Command *cmd)
 
     for (int i = 0; cmd->args[i] != NULL; i++)
     {
-        if (strcmp(cmd->args[i], ">>") == 0 || strcmp(cmd->args[i], "1>>") == 0)
+        if (strcmp(cmd->args[i], "<") == 0)
+        {
+            // Input redirection
+            if (cmd->args[i + 1] != NULL)
+            {
+                cmd->stdin_file = cmd->args[i + 1];
+                cmd->args[i] = NULL;
+            }
+        }
+        else if (strcmp(cmd->args[i], ">>") == 0 || strcmp(cmd->args[i], "1>>") == 0)
         {
             if (cmd->args[i + 1] != NULL)
             {
@@ -176,9 +187,24 @@ int execute_builtin(Command *cmd)
 {
     char **args = cmd->args;
 
-    // Handle output redirection for builtins
+    // Handle redirections for builtins
+    int saved_stdin = -1;
     int saved_stdout = -1;
     int saved_stderr = -1;
+
+    if (cmd->stdin_file != NULL)
+    {
+        int fd = open(cmd->stdin_file, O_RDONLY);
+        if (fd < 0)
+        {
+            perror(cmd->stdin_file);
+            return 1;
+        }
+
+        saved_stdin = dup(STDIN_FILENO);
+        dup2(fd, STDIN_FILENO);
+        close(fd);
+    }
 
     if (cmd->stdout_file != NULL)
     {
@@ -189,6 +215,11 @@ int execute_builtin(Command *cmd)
         if (fd < 0)
         {
             perror("open");
+            if (saved_stdin >= 0)
+            {
+                dup2(saved_stdin, STDIN_FILENO);
+                close(saved_stdin);
+            }
             return 1;
         }
 
@@ -206,6 +237,11 @@ int execute_builtin(Command *cmd)
         if (fd < 0)
         {
             perror("open");
+            if (saved_stdin >= 0)
+            {
+                dup2(saved_stdin, STDIN_FILENO);
+                close(saved_stdin);
+            }
             if (saved_stdout >= 0)
             {
                 dup2(saved_stdout, STDOUT_FILENO);
@@ -340,6 +376,12 @@ int execute_builtin(Command *cmd)
     }
 
 cleanup:
+    if (saved_stdin >= 0)
+    {
+        dup2(saved_stdin, STDIN_FILENO);
+        close(saved_stdin);
+    }
+
     if (saved_stdout >= 0)
     {
         dup2(saved_stdout, STDOUT_FILENO);
@@ -357,20 +399,34 @@ cleanup:
 
 void execute_command(Command *cmd, int input_fd, int output_fd)
 {
-    // Handle redirections
+    // Handle pipe input redirection
     if (input_fd != STDIN_FILENO)
     {
         dup2(input_fd, STDIN_FILENO);
         close(input_fd);
     }
 
+    // Handle pipe output redirection
     if (output_fd != STDOUT_FILENO)
     {
         dup2(output_fd, STDOUT_FILENO);
         close(output_fd);
     }
 
-    // Handle file redirections
+    // Handle stdin file redirection (overrides pipe input)
+    if (cmd->stdin_file != NULL)
+    {
+        int fd = open(cmd->stdin_file, O_RDONLY);
+        if (fd < 0)
+        {
+            perror(cmd->stdin_file);
+            exit(1);
+        }
+        dup2(fd, STDIN_FILENO);
+        close(fd);
+    }
+
+    // Handle stdout file redirection (overrides pipe output)
     if (cmd->stdout_file != NULL)
     {
         int flags = O_WRONLY | O_CREAT;
@@ -386,6 +442,7 @@ void execute_command(Command *cmd, int input_fd, int output_fd)
         close(fd);
     }
 
+    // Handle stderr file redirection
     if (cmd->stderr_file != NULL)
     {
         int flags = O_WRONLY | O_CREAT;
