@@ -12,6 +12,10 @@
 #define HISTORY_SIZE 1000
 #define DELIMITERS " \t\r\n"
 
+#define OP_NONE 0
+#define OP_AND 1 // &&
+#define OP_OR 2  // ||
+
 typedef struct
 {
     char **args;
@@ -21,6 +25,13 @@ typedef struct
     int stdout_append;
     int stderr_append;
 } Command;
+
+typedef struct
+{
+    Command *commands;
+    int num_commands;
+    int operator; // OP_NONE, OP_AND, or OP_OR
+} CommandGroup;
 
 // History storage
 char *history[HISTORY_SIZE];
@@ -43,7 +54,6 @@ void add_to_history(const char *cmd)
     }
     else
     {
-        // History is full, shift everything and add at end
         free(history[0]);
         for (int i = 0; i < HISTORY_SIZE - 1; i++)
         {
@@ -67,13 +77,12 @@ void load_history(void)
     FILE *f = fopen(path, "r");
     if (f == NULL)
     {
-        return; // File doesn't exist yet, not an error
+        return;
     }
 
     char line[BUFFER_SIZE];
     while (fgets(line, sizeof(line), f) != NULL && history_count < HISTORY_SIZE)
     {
-        // Remove newline
         line[strcspn(line, "\n")] = '\0';
         if (strlen(line) > 0)
         {
@@ -138,7 +147,6 @@ char **parse_line(char *line)
     {
         char c = line[i];
 
-        // Handle single quotes (only when not in double quotes)
         if (c == '\'' && !in_double_quote)
         {
             in_single_quote = !in_single_quote;
@@ -146,7 +154,6 @@ char **parse_line(char *line)
             continue;
         }
 
-        // Handle double quotes (only when not in single quotes)
         if (c == '"' && !in_single_quote)
         {
             in_double_quote = !in_double_quote;
@@ -154,7 +161,6 @@ char **parse_line(char *line)
             continue;
         }
 
-        // Handle backslash escapes
         if (c == '\\' && !in_single_quote)
         {
             char next = line[i + 1];
@@ -185,7 +191,6 @@ char **parse_line(char *line)
             }
         }
 
-        // Handle whitespace (space and tab) - only as delimiter outside quotes
         if (!in_single_quote && !in_double_quote && (c == ' ' || c == '\t'))
         {
             if (char_idx > 0)
@@ -199,7 +204,6 @@ char **parse_line(char *line)
             continue;
         }
 
-        // Add character to current token
         if (char_idx < BUFFER_SIZE - 1)
         {
             tokens[arg_idx][char_idx++] = c;
@@ -207,7 +211,6 @@ char **parse_line(char *line)
         i++;
     }
 
-    // Handle last token if any
     if (char_idx > 0)
     {
         tokens[arg_idx][char_idx] = '\0';
@@ -290,7 +293,6 @@ int execute_builtin(Command *cmd)
 {
     char **args = cmd->args;
 
-    // Handle redirections for builtins
     int saved_stdin = -1;
     int saved_stdout = -1;
     int saved_stderr = -1;
@@ -358,11 +360,10 @@ int execute_builtin(Command *cmd)
         close(fd);
     }
 
-    int result = 1;
+    int result = 0; // Default to success (0)
 
     if (strcmp(args[0], "exit") == 0)
     {
-        // Save history before exiting
         save_history();
         free_history();
 
@@ -402,6 +403,7 @@ int execute_builtin(Command *cmd)
         else
         {
             perror("pwd");
+            result = 1;
         }
     }
     else if (strcmp(args[0], "cd") == 0)
@@ -414,6 +416,7 @@ int execute_builtin(Command *cmd)
             if (path == NULL)
             {
                 fprintf(stderr, "cd: HOME not set\n");
+                result = 1;
                 goto cleanup;
             }
         }
@@ -423,6 +426,7 @@ int execute_builtin(Command *cmd)
             if (path == NULL)
             {
                 fprintf(stderr, "cd: HOME not set\n");
+                result = 1;
                 goto cleanup;
             }
         }
@@ -434,6 +438,7 @@ int execute_builtin(Command *cmd)
         if (chdir(path) != 0)
         {
             perror("cd");
+            result = 1;
         }
     }
     else if (strcmp(args[0], "type") == 0)
@@ -441,6 +446,7 @@ int execute_builtin(Command *cmd)
         if (args[1] == NULL)
         {
             fprintf(stderr, "type: missing argument\n");
+            result = 1;
             goto cleanup;
         }
 
@@ -454,6 +460,7 @@ int execute_builtin(Command *cmd)
         if (path == NULL)
         {
             printf("%s: not found\n", args[1]);
+            result = 1;
             goto cleanup;
         }
 
@@ -461,6 +468,7 @@ int execute_builtin(Command *cmd)
         if (path_copy == NULL)
         {
             perror("strdup");
+            result = 1;
             goto cleanup;
         }
 
@@ -484,6 +492,7 @@ int execute_builtin(Command *cmd)
         if (!found)
         {
             printf("%s: not found\n", args[1]);
+            result = 1;
         }
 
         free(path_copy);
@@ -513,21 +522,18 @@ cleanup:
 
 void execute_command(Command *cmd, int input_fd, int output_fd)
 {
-    // Handle pipe input redirection
     if (input_fd != STDIN_FILENO)
     {
         dup2(input_fd, STDIN_FILENO);
         close(input_fd);
     }
 
-    // Handle pipe output redirection
     if (output_fd != STDOUT_FILENO)
     {
         dup2(output_fd, STDOUT_FILENO);
         close(output_fd);
     }
 
-    // Handle stdin file redirection (overrides pipe input)
     if (cmd->stdin_file != NULL)
     {
         int fd = open(cmd->stdin_file, O_RDONLY);
@@ -540,7 +546,6 @@ void execute_command(Command *cmd, int input_fd, int output_fd)
         close(fd);
     }
 
-    // Handle stdout file redirection (overrides pipe output)
     if (cmd->stdout_file != NULL)
     {
         int flags = O_WRONLY | O_CREAT;
@@ -556,7 +561,6 @@ void execute_command(Command *cmd, int input_fd, int output_fd)
         close(fd);
     }
 
-    // Handle stderr file redirection
     if (cmd->stderr_file != NULL)
     {
         int flags = O_WRONLY | O_CREAT;
@@ -572,7 +576,6 @@ void execute_command(Command *cmd, int input_fd, int output_fd)
         close(fd);
     }
 
-    // Execute the command
     execvp(cmd->args[0], cmd->args);
     fprintf(stderr, "%s: command not found\n", cmd->args[0]);
     exit(127);
@@ -580,7 +583,6 @@ void execute_command(Command *cmd, int input_fd, int output_fd)
 
 int execute_pipeline(Command *commands, int num_commands)
 {
-    // Handle single command without pipes
     if (num_commands == 1)
     {
         if (is_builtin(commands[0].args[0]))
@@ -597,6 +599,11 @@ int execute_pipeline(Command *commands, int num_commands)
         {
             int status;
             waitpid(pid, &status, 0);
+            if (WIFEXITED(status))
+            {
+                return WEXITSTATUS(status);
+            }
+            return 1;
         }
         else
         {
@@ -605,7 +612,6 @@ int execute_pipeline(Command *commands, int num_commands)
         return 1;
     }
 
-    // Handle pipeline
     int prev_pipe_read = STDIN_FILENO;
     pid_t pids[MAX_COMMANDS];
 
@@ -613,7 +619,6 @@ int execute_pipeline(Command *commands, int num_commands)
     {
         int pipe_fd[2];
 
-        // Create pipe for all but the last command
         if (i < num_commands - 1)
         {
             if (pipe(pipe_fd) < 0)
@@ -627,11 +632,9 @@ int execute_pipeline(Command *commands, int num_commands)
 
         if (pids[i] == 0)
         {
-            // Child process
             int input_fd = prev_pipe_read;
             int output_fd = (i < num_commands - 1) ? pipe_fd[1] : STDOUT_FILENO;
 
-            // Close unused pipe end
             if (i < num_commands - 1)
             {
                 close(pipe_fd[0]);
@@ -645,14 +648,11 @@ int execute_pipeline(Command *commands, int num_commands)
             return 1;
         }
 
-        // Parent process
-        // Close the previous pipe's read end
         if (prev_pipe_read != STDIN_FILENO)
         {
             close(prev_pipe_read);
         }
 
-        // Close the write end of current pipe
         if (i < num_commands - 1)
         {
             close(pipe_fd[1]);
@@ -660,70 +660,137 @@ int execute_pipeline(Command *commands, int num_commands)
         }
     }
 
-    // Wait for all children
+    int last_status = 0;
     for (int i = 0; i < num_commands; i++)
     {
         int status;
         waitpid(pids[i], &status, 0);
+        if (i == num_commands - 1 && WIFEXITED(status))
+        {
+            last_status = WEXITSTATUS(status);
+        }
     }
 
-    return 1;
+    return last_status;
 }
 
 int execute(char **args)
 {
     if (args[0] == NULL)
     {
-        return 1;
+        return 0;
     }
 
-    // Split commands by pipe
-    static Command commands[MAX_COMMANDS];
-    int num_commands = 0;
-    int arg_start = 0;
+    // Split by logical operators (&& and ||)
+    static CommandGroup groups[MAX_COMMANDS];
+    int num_groups = 0;
+    int group_start = 0;
 
-    for (int i = 0; args[i] != NULL || arg_start <= i; i++)
+    groups[0].operator = OP_NONE;
+
+    for (int i = 0; args[i] != NULL; i++)
     {
-        if (args[i] == NULL || strcmp(args[i], "|") == 0)
+        if (strcmp(args[i], "&&") == 0)
         {
-            if (i > arg_start)
+            // End current group
+            args[i] = NULL;
+            num_groups++;
+            group_start = i + 1;
+            if (num_groups < MAX_COMMANDS)
             {
-                commands[num_commands].args = &args[arg_start];
-                if (args[i] != NULL && strcmp(args[i], "|") == 0)
-                {
-                    args[i] = NULL; // Null-terminate this command
-                }
-                parse_redirections(&commands[num_commands]);
-                num_commands++;
-                arg_start = i + 1;
+                groups[num_groups].operator = OP_AND;
             }
-
-            if (args[i] == NULL)
+        }
+        else if (strcmp(args[i], "||") == 0)
+        {
+            // End current group
+            args[i] = NULL;
+            num_groups++;
+            group_start = i + 1;
+            if (num_groups < MAX_COMMANDS)
             {
-                break;
+                groups[num_groups].operator = OP_OR;
             }
         }
     }
+    num_groups++;
 
-    if (num_commands == 0)
+    // Now parse each group for pipes
+    int last_exit_status = 0;
+    group_start = 0;
+
+    for (int g = 0; g < num_groups; g++)
     {
-        return 1;
+        // Check if we should skip this group based on logical operator
+        if (groups[g].operator == OP_AND && last_exit_status != 0)
+        {
+            // Previous command failed, skip this command
+            // Find the start of next group
+            while (group_start < MAX_ARGS && args[group_start] != NULL)
+            {
+                group_start++;
+            }
+            group_start++;
+            continue;
+        }
+        else if (groups[g].operator == OP_OR && last_exit_status == 0)
+        {
+            // Previous command succeeded, skip this command
+            while (group_start < MAX_ARGS && args[group_start] != NULL)
+            {
+                group_start++;
+            }
+            group_start++;
+            continue;
+        }
+
+        // Parse this group for pipes
+        static Command commands[MAX_COMMANDS];
+        int num_commands = 0;
+        int arg_start = group_start;
+
+        for (int i = group_start;; i++)
+        {
+            if (args[i] == NULL || strcmp(args[i], "|") == 0)
+            {
+                if (i > arg_start && num_commands < MAX_COMMANDS)
+                {
+                    commands[num_commands].args = &args[arg_start];
+                    if (args[i] != NULL && strcmp(args[i], "|") == 0)
+                    {
+                        args[i] = NULL;
+                    }
+                    parse_redirections(&commands[num_commands]);
+                    num_commands++;
+                    arg_start = i + 1;
+                }
+
+                if (args[i] == NULL)
+                {
+                    group_start = i + 1;
+                    break;
+                }
+            }
+        }
+
+        if (num_commands > 0)
+        {
+            last_exit_status = execute_pipeline(commands, num_commands);
+        }
     }
 
-    return execute_pipeline(commands, num_commands);
+    return last_exit_status;
 }
 
 int main(void)
 {
     char input[BUFFER_SIZE];
     char **args;
-    int status = 1;
     int interactive = isatty(STDIN_FILENO);
 
-    // Load history from file
     load_history();
 
-    while (status)
+    while (1)
     {
         if (interactive)
         {
@@ -747,14 +814,12 @@ int main(void)
             continue;
         }
 
-        // Add command to history
         add_to_history(input);
 
         args = parse_line(input);
-        status = execute(args);
+        execute(args);
     }
 
-    // Save history and cleanup
     save_history();
     free_history();
 
