@@ -5,17 +5,27 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
-#include <signal.h>
 
 #define BUFFER_SIZE 1024
 #define MAX_ARGS 64
 #define MAX_COMMANDS 64
 #define HISTORY_SIZE 1000
 #define DELIMITERS " \t\r\n"
+#define SHELL_VERSION "1.0"
 
 #define OP_NONE 0
 #define OP_AND 1 // &&
 #define OP_OR 2  // ||
+
+// ANSI Color codes
+#define COLOR_RESET "\033[0m"
+#define COLOR_RED "\033[1;31m"
+#define COLOR_GREEN "\033[1;32m"
+#define COLOR_YELLOW "\033[1;33m"
+#define COLOR_BLUE "\033[1;34m"
+#define COLOR_MAGENTA "\033[1;35m"
+#define COLOR_CYAN "\033[1;36m"
+#define COLOR_WHITE "\033[1;37m"
 
 typedef struct
 {
@@ -38,34 +48,42 @@ typedef struct
 char *history[HISTORY_SIZE];
 int history_count = 0;
 
-// Signal handling
-volatile sig_atomic_t sigint_received = 0;
-
-void sigint_handler(int sig)
+void print_banner(void)
 {
-    (void)sig; // Unused parameter
-
-    // Just print a newline
-    write(STDOUT_FILENO, "\n", 1);
-    sigint_received = 1;
+    printf("\n");
+    printf(COLOR_CYAN "╔════════════════════════════════════════════╗\n");
+    printf("║                                            ║\n");
+    printf("║        " COLOR_YELLOW "MyShell v%s" COLOR_CYAN "                      ║\n", SHELL_VERSION);
+    printf("║                                            ║\n");
+    printf("║  " COLOR_WHITE "A POSIX-compliant shell implementation" COLOR_CYAN "   ║\n");
+    printf("║  " COLOR_GREEN "Type 'help' for available commands" COLOR_CYAN "      ║\n");
+    printf("║                                            ║\n");
+    printf("╚════════════════════════════════════════════╝\n" COLOR_RESET);
+    printf("\n");
 }
 
-void setup_signal_handlers(void)
+void print_prompt(void)
 {
-    struct sigaction sa;
+    char cwd[BUFFER_SIZE];
+    char *user = getenv("USER");
+    char *home = getenv("HOME");
 
-    // Set up SIGINT handler (Ctrl+C)
-    sa.sa_handler = sigint_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART; // Restart interrupted system calls
-
-    if (sigaction(SIGINT, &sa, NULL) == -1)
+    if (getcwd(cwd, sizeof(cwd)) == NULL)
     {
-        perror("sigaction");
+        strcpy(cwd, "?");
     }
 
-    // Ignore SIGTSTP (Ctrl+Z) for now
-    signal(SIGTSTP, SIG_IGN);
+    // Replace home directory with ~
+    if (home != NULL && strncmp(cwd, home, strlen(home)) == 0)
+    {
+        char temp[BUFFER_SIZE];
+        snprintf(temp, sizeof(temp), "~%s", cwd + strlen(home));
+        strcpy(cwd, temp);
+    }
+
+    printf(COLOR_GREEN "%s" COLOR_RESET ":" COLOR_BLUE "%s" COLOR_RESET "$ ",
+           user ? user : "user", cwd);
+    fflush(stdout);
 }
 
 void add_to_history(const char *cmd)
@@ -317,7 +335,50 @@ int is_builtin(char *cmd)
             strcmp(cmd, "pwd") == 0 ||
             strcmp(cmd, "cd") == 0 ||
             strcmp(cmd, "type") == 0 ||
-            strcmp(cmd, "history") == 0);
+            strcmp(cmd, "history") == 0 ||
+            strcmp(cmd, "help") == 0 ||
+            strcmp(cmd, "clear") == 0);
+}
+
+int builtin_help(void)
+{
+    printf("\n" COLOR_CYAN "MyShell v%s - Built-in Commands\n" COLOR_RESET "\n", SHELL_VERSION);
+
+    printf(COLOR_YELLOW "Navigation & Files:\n" COLOR_RESET);
+    printf("  " COLOR_GREEN "cd [dir]" COLOR_RESET "      Change directory (no arg = HOME)\n");
+    printf("  " COLOR_GREEN "pwd" COLOR_RESET "           Print working directory\n");
+    printf("\n");
+
+    printf(COLOR_YELLOW "Information:\n" COLOR_RESET);
+    printf("  " COLOR_GREEN "type <cmd>" COLOR_RESET "   Show command type and location\n");
+    printf("  " COLOR_GREEN "history" COLOR_RESET "      Show command history\n");
+    printf("  " COLOR_GREEN "help" COLOR_RESET "         Show this help message\n");
+    printf("\n");
+
+    printf(COLOR_YELLOW "Output:\n" COLOR_RESET);
+    printf("  " COLOR_GREEN "echo [text]" COLOR_RESET "  Print text to stdout\n");
+    printf("  " COLOR_GREEN "clear" COLOR_RESET "        Clear the screen\n");
+    printf("\n");
+
+    printf(COLOR_YELLOW "Shell Control:\n" COLOR_RESET);
+    printf("  " COLOR_GREEN "exit [code]" COLOR_RESET "  Exit shell (default code: 0)\n");
+    printf("\n");
+
+    printf(COLOR_CYAN "Features:\n" COLOR_RESET);
+    printf("  • Pipes: " COLOR_GREEN "cmd1 | cmd2 | cmd3\n" COLOR_RESET);
+    printf("  • Redirects: " COLOR_GREEN "> >> < 2> 2>>\n" COLOR_RESET);
+    printf("  • Logical: " COLOR_GREEN "&& ||\n" COLOR_RESET);
+    printf("  • Quotes: " COLOR_GREEN "'single' \"double\" \\\n" COLOR_RESET);
+    printf("\n");
+
+    printf(COLOR_YELLOW "Examples:\n" COLOR_RESET);
+    printf("  " COLOR_GREEN "ls | grep txt > files.txt\n" COLOR_RESET);
+    printf("  " COLOR_GREEN "cat file.txt 2> errors.log\n" COLOR_RESET);
+    printf("  " COLOR_GREEN "mkdir test && cd test && pwd\n" COLOR_RESET);
+    printf("  " COLOR_GREEN "echo 'Hello World'\n" COLOR_RESET);
+    printf("\n");
+
+    return 0;
 }
 
 int execute_builtin(Command *cmd)
@@ -398,6 +459,8 @@ int execute_builtin(Command *cmd)
         save_history();
         free_history();
 
+        printf(COLOR_CYAN "\nGoodbye! 👋\n" COLOR_RESET);
+
         int exit_code = 0;
         if (args[1] != NULL)
         {
@@ -405,11 +468,20 @@ int execute_builtin(Command *cmd)
         }
         exit(exit_code);
     }
+    else if (strcmp(args[0], "help") == 0)
+    {
+        result = builtin_help();
+    }
+    else if (strcmp(args[0], "clear") == 0)
+    {
+        printf("\033[2J\033[H");
+        fflush(stdout);
+    }
     else if (strcmp(args[0], "history") == 0)
     {
         for (int i = 0; i < history_count; i++)
         {
-            printf("%d  %s\n", i + 1, history[i]);
+            printf("%4d  %s\n", i + 1, history[i]);
         }
     }
     else if (strcmp(args[0], "echo") == 0)
@@ -553,10 +625,6 @@ cleanup:
 
 void execute_command(Command *cmd, int input_fd, int output_fd)
 {
-    // Child process: restore default signal handlers
-    signal(SIGINT, SIG_DFL);
-    signal(SIGTSTP, SIG_DFL);
-
     if (input_fd != STDIN_FILENO)
     {
         dup2(input_fd, STDIN_FILENO);
@@ -716,6 +784,7 @@ int execute(char **args)
         return 0;
     }
 
+    // Split by logical operators (&& and ||)
     static CommandGroup groups[MAX_COMMANDS];
     int num_groups = 0;
     int group_start = 0;
@@ -814,20 +883,18 @@ int main(void)
     char **args;
     int interactive = isatty(STDIN_FILENO);
 
-    // Set up signal handlers
-    setup_signal_handlers();
-
     load_history();
+
+    if (interactive)
+    {
+        print_banner();
+    }
 
     while (1)
     {
-        // Reset signal flag
-        sigint_received = 0;
-
         if (interactive)
         {
-            printf("$ ");
-            fflush(stdout);
+            print_prompt();
         }
 
         if (fgets(input, BUFFER_SIZE, stdin) == NULL)
@@ -837,12 +904,6 @@ int main(void)
                 printf("\n");
             }
             break;
-        }
-
-        // If Ctrl+C was pressed, just show new prompt
-        if (sigint_received)
-        {
-            continue;
         }
 
         input[strcspn(input, "\n")] = '\0';
