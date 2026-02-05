@@ -5,6 +5,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <signal.h>
 
 #define BUFFER_SIZE 1024
 #define MAX_ARGS 64
@@ -30,12 +31,42 @@ typedef struct
 {
     Command *commands;
     int num_commands;
-    int operator; // OP_NONE, OP_AND, or OP_OR
+    int operator;
 } CommandGroup;
 
 // History storage
 char *history[HISTORY_SIZE];
 int history_count = 0;
+
+// Signal handling
+volatile sig_atomic_t sigint_received = 0;
+
+void sigint_handler(int sig)
+{
+    (void)sig; // Unused parameter
+
+    // Just print a newline
+    write(STDOUT_FILENO, "\n", 1);
+    sigint_received = 1;
+}
+
+void setup_signal_handlers(void)
+{
+    struct sigaction sa;
+
+    // Set up SIGINT handler (Ctrl+C)
+    sa.sa_handler = sigint_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART; // Restart interrupted system calls
+
+    if (sigaction(SIGINT, &sa, NULL) == -1)
+    {
+        perror("sigaction");
+    }
+
+    // Ignore SIGTSTP (Ctrl+Z) for now
+    signal(SIGTSTP, SIG_IGN);
+}
 
 void add_to_history(const char *cmd)
 {
@@ -360,7 +391,7 @@ int execute_builtin(Command *cmd)
         close(fd);
     }
 
-    int result = 0; // Default to success (0)
+    int result = 0;
 
     if (strcmp(args[0], "exit") == 0)
     {
@@ -522,6 +553,10 @@ cleanup:
 
 void execute_command(Command *cmd, int input_fd, int output_fd)
 {
+    // Child process: restore default signal handlers
+    signal(SIGINT, SIG_DFL);
+    signal(SIGTSTP, SIG_DFL);
+
     if (input_fd != STDIN_FILENO)
     {
         dup2(input_fd, STDIN_FILENO);
@@ -681,7 +716,6 @@ int execute(char **args)
         return 0;
     }
 
-    // Split by logical operators (&& and ||)
     static CommandGroup groups[MAX_COMMANDS];
     int num_groups = 0;
     int group_start = 0;
@@ -692,7 +726,6 @@ int execute(char **args)
     {
         if (strcmp(args[i], "&&") == 0)
         {
-            // End current group
             args[i] = NULL;
             num_groups++;
             group_start = i + 1;
@@ -703,7 +736,6 @@ int execute(char **args)
         }
         else if (strcmp(args[i], "||") == 0)
         {
-            // End current group
             args[i] = NULL;
             num_groups++;
             group_start = i + 1;
@@ -715,17 +747,13 @@ int execute(char **args)
     }
     num_groups++;
 
-    // Now parse each group for pipes
     int last_exit_status = 0;
     group_start = 0;
 
     for (int g = 0; g < num_groups; g++)
     {
-        // Check if we should skip this group based on logical operator
         if (groups[g].operator == OP_AND && last_exit_status != 0)
         {
-            // Previous command failed, skip this command
-            // Find the start of next group
             while (group_start < MAX_ARGS && args[group_start] != NULL)
             {
                 group_start++;
@@ -735,7 +763,6 @@ int execute(char **args)
         }
         else if (groups[g].operator == OP_OR && last_exit_status == 0)
         {
-            // Previous command succeeded, skip this command
             while (group_start < MAX_ARGS && args[group_start] != NULL)
             {
                 group_start++;
@@ -744,7 +771,6 @@ int execute(char **args)
             continue;
         }
 
-        // Parse this group for pipes
         static Command commands[MAX_COMMANDS];
         int num_commands = 0;
         int arg_start = group_start;
@@ -788,10 +814,16 @@ int main(void)
     char **args;
     int interactive = isatty(STDIN_FILENO);
 
+    // Set up signal handlers
+    setup_signal_handlers();
+
     load_history();
 
     while (1)
     {
+        // Reset signal flag
+        sigint_received = 0;
+
         if (interactive)
         {
             printf("$ ");
@@ -805,6 +837,12 @@ int main(void)
                 printf("\n");
             }
             break;
+        }
+
+        // If Ctrl+C was pressed, just show new prompt
+        if (sigint_received)
+        {
+            continue;
         }
 
         input[strcspn(input, "\n")] = '\0';
