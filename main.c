@@ -9,6 +9,7 @@
 #define BUFFER_SIZE 1024
 #define MAX_ARGS 64
 #define MAX_COMMANDS 64
+#define HISTORY_SIZE 1000
 #define DELIMITERS " \t\r\n"
 
 typedef struct
@@ -20,6 +21,108 @@ typedef struct
     int stdout_append;
     int stderr_append;
 } Command;
+
+// History storage
+char *history[HISTORY_SIZE];
+int history_count = 0;
+
+void add_to_history(const char *cmd)
+{
+    if (cmd == NULL || strlen(cmd) == 0)
+    {
+        return;
+    }
+
+    if (history_count < HISTORY_SIZE)
+    {
+        history[history_count] = strdup(cmd);
+        if (history[history_count] != NULL)
+        {
+            history_count++;
+        }
+    }
+    else
+    {
+        // History is full, shift everything and add at end
+        free(history[0]);
+        for (int i = 0; i < HISTORY_SIZE - 1; i++)
+        {
+            history[i] = history[i + 1];
+        }
+        history[HISTORY_SIZE - 1] = strdup(cmd);
+    }
+}
+
+void load_history(void)
+{
+    char *home = getenv("HOME");
+    if (home == NULL)
+    {
+        return;
+    }
+
+    char path[BUFFER_SIZE];
+    snprintf(path, sizeof(path), "%s/.myshell_history", home);
+
+    FILE *f = fopen(path, "r");
+    if (f == NULL)
+    {
+        return; // File doesn't exist yet, not an error
+    }
+
+    char line[BUFFER_SIZE];
+    while (fgets(line, sizeof(line), f) != NULL && history_count < HISTORY_SIZE)
+    {
+        // Remove newline
+        line[strcspn(line, "\n")] = '\0';
+        if (strlen(line) > 0)
+        {
+            history[history_count] = strdup(line);
+            if (history[history_count] != NULL)
+            {
+                history_count++;
+            }
+        }
+    }
+
+    fclose(f);
+}
+
+void save_history(void)
+{
+    char *home = getenv("HOME");
+    if (home == NULL)
+    {
+        return;
+    }
+
+    char path[BUFFER_SIZE];
+    snprintf(path, sizeof(path), "%s/.myshell_history", home);
+
+    FILE *f = fopen(path, "w");
+    if (f == NULL)
+    {
+        perror("save_history");
+        return;
+    }
+
+    for (int i = 0; i < history_count; i++)
+    {
+        fprintf(f, "%s\n", history[i]);
+    }
+
+    fclose(f);
+}
+
+void free_history(void)
+{
+    for (int i = 0; i < history_count; i++)
+    {
+        free(history[i]);
+        history[i] = NULL;
+    }
+    history_count = 0;
+}
 
 char **parse_line(char *line)
 {
@@ -128,7 +231,6 @@ void parse_redirections(Command *cmd)
     {
         if (strcmp(cmd->args[i], "<") == 0)
         {
-            // Input redirection
             if (cmd->args[i + 1] != NULL)
             {
                 cmd->stdin_file = cmd->args[i + 1];
@@ -180,7 +282,8 @@ int is_builtin(char *cmd)
             strcmp(cmd, "echo") == 0 ||
             strcmp(cmd, "pwd") == 0 ||
             strcmp(cmd, "cd") == 0 ||
-            strcmp(cmd, "type") == 0);
+            strcmp(cmd, "type") == 0 ||
+            strcmp(cmd, "history") == 0);
 }
 
 int execute_builtin(Command *cmd)
@@ -259,12 +362,23 @@ int execute_builtin(Command *cmd)
 
     if (strcmp(args[0], "exit") == 0)
     {
+        // Save history before exiting
+        save_history();
+        free_history();
+
         int exit_code = 0;
         if (args[1] != NULL)
         {
             exit_code = atoi(args[1]);
         }
         exit(exit_code);
+    }
+    else if (strcmp(args[0], "history") == 0)
+    {
+        for (int i = 0; i < history_count; i++)
+        {
+            printf("%d  %s\n", i + 1, history[i]);
+        }
     }
     else if (strcmp(args[0], "echo") == 0)
     {
@@ -606,6 +720,9 @@ int main(void)
     int status = 1;
     int interactive = isatty(STDIN_FILENO);
 
+    // Load history from file
+    load_history();
+
     while (status)
     {
         if (interactive)
@@ -630,9 +747,16 @@ int main(void)
             continue;
         }
 
+        // Add command to history
+        add_to_history(input);
+
         args = parse_line(input);
         status = execute(args);
     }
+
+    // Save history and cleanup
+    save_history();
+    free_history();
 
     return 0;
 }
